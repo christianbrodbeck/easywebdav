@@ -94,7 +94,6 @@ class Client(object):
         self.cwd = '/'
         self.session = requests.session()
         self.session.verify = verify_ssl
-        self.session.stream = True
 
         if cert:
             self.session.cert = cert
@@ -184,6 +183,11 @@ class Client(object):
                 self._download(f, response)
         else:
             self._download(local_path_or_fileobj, response)
+
+        # This doesn't actually close the connection, but
+        # give it back to the connection pool because we have read
+        # all content.
+        response.close()
 
     @staticmethod
     def _download(fileobj, response):
