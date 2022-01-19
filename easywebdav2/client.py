@@ -1,3 +1,4 @@
+from pathlib import Path
 import requests
 import six
 import platform
@@ -178,7 +179,7 @@ class Client(object):
 
     def download(self, remote_path, local_path_or_fileobj, **kwargs):
         response = self._send('GET', remote_path, 200, stream=True, **kwargs)
-        if isinstance(local_path_or_fileobj, six.string_types):
+        if isinstance(local_path_or_fileobj, (Path, *six.string_types)):
             with open(local_path_or_fileobj, 'wb') as f:
                 self._download(f, response)
         else:
@@ -188,6 +189,39 @@ class Client(object):
         # give it back to the connection pool because we have read
         # all content.
         response.close()
+
+    def download_recursively(self, remote_path, local_path, **kwargs):
+        local_path = Path(local_path)
+        cwd = Path(self.cwd)
+        response = self._send('PROPFIND', remote_path, (207, 301), headers={'Depth': '1'}, **kwargs)
+
+        # Redirect
+        if response.status_code == 301:
+            url = urlparse(response.headers['location'])
+            return self.download_recursively(url.path, local_path, **kwargs)
+
+        tree = xml.fromstring(response.content)
+        for elem in tree.findall('{DAV:}response'):
+            content_type = getrealcontenttype(elem)
+            path = Path(prop(elem, 'href'))
+            rel_path = path.relative_to(cwd)
+            local_target = local_path / rel_path
+            if content_type == 'httpd/unix-directory':
+                if path == cwd / remote_path:
+                    continue
+                elif not local_path.exists():
+                    raise FileNotFoundError(f"{local_path=} does not exist")
+                local_target.mkdir(parents=True, exist_ok=True)
+                print(f'DIR: {rel_path}')
+                self.download_recursively(rel_path, local_target, **kwargs)
+            elif content_type:
+                raise RuntimeError(f'{content_type=}')
+            else:
+                if local_path.exists():
+                    local_target.parent.mkdir(parents=True, exist_ok=True)
+                print(f'FILE: {rel_path}')
+                self.download(rel_path, local_target, **kwargs)
+        print('..')
 
     @staticmethod
     def _download(fileobj, response):
